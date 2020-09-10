@@ -4,15 +4,20 @@
 <head>
     <meta charset="UTF-8">
     <script type="text/javascript">
+        function NoAction() {
+            alert("ごめんね工事中。");
+        }
+
     </script>
 </head>
 
 <body>
-    ファイルを選択：<input type="file" accept="image/jpeg,image/png,image/gif" onchange="selectAnalyzeMode(this)" />
-
-    <div>
-        <img src="" id="img" />
-    </div>
+    ファイルを選択：
+    <br>
+    <input type="file" accept="image/jpeg,image/png,image/gif" onchange="selectAnalyzeMode(this)" />
+    <br>
+    <br>
+    <button id="button" onClick="NoAction()">ボタンを押してください</button>
 </body>
 
 </html>
