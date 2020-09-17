@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>ページタイトル</title>
+    <meta charset="utf-8" />
+    <style type="text/css">
+        .foo-before {
+            background-color: white;
+            color: black;
+        }
+
+        .foo-after {
+            background-color: black;
+            color: yellow;
+        }
+    </style>
+</head>
+
+<body>
+    <p id="id_1">1. Bodyのpタグにidを設定し、JavaScript側でonclickのイベント作成</p>
+    <p id="id_2">2. 1同様だが、関数名を指定せずにonclickイベントを作成</p>
+    <p id="id_3" onclick="pClick()">3. pタグ内にonclickのイベント作成</p>
+    <p id="id_4" class="foo-before">4. クリックするたびクラスをswapして色を変更（クラスの入れ替えはjQueryで実装）</p>
+    <p id="id_5">5. クリックするとスタイルを変更</p>
+
+    <script type="text/javascript">
+        // 変数定義（「//」から始まる行はコメントアウト）
+        var id_1 = document.getElementById("id_1");
+        var id_2 = document.getElementById("id_2");
+        var id_4 = document.getElementById("id_4");
+
+        // id_1のクリックイベント
+        id_1.onclick = function id1Click() {
+            alert("id_1をクリック");
+        }
+
+        // id_2のクリックイベント
+        id_2.onclick = function () {
+            alert("id_2をクリック");
+        }
+
+        // id_3のクリックイベント。idは使用せず関数を直接コール
+        function pClick() {
+            alert("(id_3)をクリック");
+        }
+    </script>
+
+    <script type="text/javascript">
+        var stylesheet = document.styleSheets.item(0);
+
+        // idは、別のscriptタグ内でも使える
+        id_5.onclick = function () {
+            //第2引数は、「CSSの何番目のルールにするか」。0始まりの番号。
+            stylesheet.insertRule("#id_5 {font-size: 20px;}", 0);
+            stylesheet.insertRule("#id_5 {background-color: pink;}", stylesheet.cssRules.length);
+        }
+    </script>
+
+    <!-- jQueryを使用 -->
+    <script type="text/javascript" src="http://ajax.googleapis.com/ajax/libs/jquery/1.7.0/jquery.min.js"></script>
+
+    <script type="text/javascript">
+        // $関数はjQueryの定番
+        $('#id_4').click(function () {
+            this.className = (this.className === 'foo-before') ? 'foo-after' : 'foo-before';
+        });
+
+        document.writeln("<p>6. JSでHTML記述しているので、リロードする時に少しだけ表示が遅れる</p>");
+        document.writeln("<p>7. URLは、「" + document.URL + "」です</p>");
+        document.writeln("<p>8. ページタイトルは「" + document.title + "」です</p>");
+    </script>
+</body>
+
+</html>
