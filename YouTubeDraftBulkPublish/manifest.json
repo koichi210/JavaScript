@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube ドラフト一括公開設定",
+  "version": "1.0",
+  "description": "YouTube Studioのドラフト動画をまとめて限定公開にするボタン",
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": ["scripting", "activeTab", "storage"],
+  "host_permissions": ["https://studio.youtube.com/*"]
+}
