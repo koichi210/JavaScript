@@ -9,6 +9,13 @@
   "background": {
     "service_worker": "background.js"
   },
-  "permissions": ["scripting", "activeTab", "storage"],
+  "content_scripts": [
+    {
+      "matches": ["https://studio.youtube.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": ["activeTab", "storage"],
   "host_permissions": ["https://studio.youtube.com/*"]
 }

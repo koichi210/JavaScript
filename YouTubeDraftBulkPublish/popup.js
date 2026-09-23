@@ -40,16 +40,12 @@ runBtn.addEventListener('click', async () => {
   if (!tab) return;
 
   runBtn.disabled = true;
-  statusEl.textContent = '実行中... 進捗は上に出るよ';
+  statusEl.textContent = '実行中... 進捗は上に出るよ(途中でページが自動更新されることがあるよ)';
 
   try {
-    await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      files: ['content.js']
-    });
-    statusEl.textContent = 'スクリプト起動したよ!止めたい時は🛑停止を押してね';
+    await chrome.tabs.sendMessage(tab.id, { type: 'start' });
   } catch (e) {
-    statusEl.textContent = 'エラー: ' + e.message;
+    statusEl.textContent = 'エラー: ページを一度リロードしてから押してみて (' + e.message + ')';
   } finally {
     runBtn.disabled = false;
   }
@@ -59,11 +55,10 @@ stopBtn.addEventListener('click', async () => {
   const tab = await getStudioTab();
   if (!tab) return;
 
-  await chrome.scripting.executeScript({
-    target: { tabId: tab.id },
-    func: () => {
-      window.__ytDraftBulkStop = true;
-    }
-  });
-  statusEl.textContent = '停止リクエストを送ったよ。今処理中の1本が終わり次第止まるよ';
+  try {
+    await chrome.tabs.sendMessage(tab.id, { type: 'stop' });
+    statusEl.textContent = '停止リクエストを送ったよ。今処理中の1本が終わり次第止まるよ';
+  } catch (e) {
+    statusEl.textContent = 'エラー: ' + e.message;
+  }
 });

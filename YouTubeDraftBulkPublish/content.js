@@ -1,4 +1,9 @@
 (function () {
+  // manifestのcontent_scriptsで毎ページ自動注入されるようになったので、二重実行だけ防ぐ
+  if (window.__ytDraftBulkInjected) return;
+  window.__ytDraftBulkInjected = true;
+  window.__ytDraftBulkStop = false;
+
   function delay(ms) {
     return new Promise((r) => setTimeout(r, ms));
   }
@@ -60,10 +65,6 @@
     return false;
   }
 
-  function getAllRows() {
-    return [...document.querySelectorAll('ytcp-video-row')];
-  }
-
   function findNextPageButton() {
     const candidates = [
       ...document.querySelectorAll('button, ytcp-icon-button, ytcp-button, paper-icon-button'),
@@ -79,33 +80,6 @@
         aria.includes('次のページ')
       );
     });
-  }
-
-  // 今見えてる行を全部処理し終わったとき、次ページ送り or スクロール読み込みを試す
-  async function tryLoadMore() {
-    const nextPageBtn = findNextPageButton();
-    if (nextPageBtn) {
-      console.log('  → 次のページへ移動を試みる');
-      nextPageBtn.click();
-      await delay(2000);
-      return true;
-    }
-
-    const before = getAllRows().length;
-    [document.scrollingElement, document.querySelector('ytcp-video-list'), document.querySelector('#video-list')]
-      .filter(Boolean)
-      .forEach((el) => {
-        el.scrollTop = el.scrollHeight;
-      });
-    window.scrollTo(0, document.body.scrollHeight);
-    await delay(1800);
-    const after = getAllRows().length;
-    if (after > before) {
-      console.log('  → スクロールで', after - before, '件 追加読み込みされた');
-      return true;
-    }
-
-    return false;
   }
 
   async function processOneDraft(row) {
@@ -158,42 +132,18 @@
     }
   }
 
-  async function autoPublishAllDrafts() {
-    window.__ytDraftBulkStop = false;
-    let count = 0;
-    let consecutiveLoadFails = 0;
+  function saveState(patch) {
+    chrome.storage.local.set(patch);
+  }
 
-    chrome.storage.local.set({ status: 'running', count });
-    report({ type: 'progress', count });
-
+  // ① 今見えてるページのドラフトを、無くなるまで処理し続ける
+  async function processCurrentPage(count) {
     while (true) {
-      if (window.__ytDraftBulkStop) {
-        console.log('🛑 停止ボタンが押されたので終了。ここまでで', count, '本処理した');
-        chrome.storage.local.set({ status: 'stopped', count });
-        report({ type: 'stopped', count });
-        break;
-      }
+      checkStop();
       const rows = findDraftRows();
       if (rows.length === 0) {
-        console.log('このページにはもうドラフトがない → 追加読み込みを試す');
-        const loaded = await tryLoadMore();
-        if (loaded) {
-          consecutiveLoadFails = 0;
-          await delay(1000);
-          continue;
-        }
-        consecutiveLoadFails++;
-        if (consecutiveLoadFails >= 3) {
-          console.log('🎉 これ以上読み込めなかったので終了。合計', count, '本処理した!');
-          chrome.storage.local.set({ status: 'done', count });
-          report({ type: 'done', count });
-          break;
-        }
-        console.log('  読み込み失敗', consecutiveLoadFails, '回目、もう少し待って再挑戦');
-        await delay(1500);
-        continue;
+        return count; // このページ分は打ち止め
       }
-      consecutiveLoadFails = 0;
       console.log('このページの残り', rows.length, '本 → 1本処理開始');
 
       let succeeded = false;
@@ -205,34 +155,125 @@
           break;
         } catch (e) {
           lastError = e;
-          if (e && e.message === '__stopped_by_user__') break;
+          if (e && e.message === '__stopped_by_user__') throw e;
           console.warn('  ⚠️ 失敗(試行', attempt, '/3):', e.message || e, '→ 少し待ってリトライ');
           tryRecoverError();
           await delay(3000);
         }
       }
 
-      if (succeeded) {
-        count++;
-        console.log('===', count, '本目 完了 ===');
-        chrome.storage.local.set({ status: 'running', count });
-        report({ type: 'progress', count });
-      } else if (lastError && lastError.message === '__stopped_by_user__') {
-        console.log('🛑 停止ボタンが押されたので終了。ここまでで', count, '本処理した');
-        chrome.storage.local.set({ status: 'stopped', count });
-        report({ type: 'stopped', count });
-        break;
-      } else {
-        console.error('🛑 3回試して失敗したので停止:', lastError);
-        chrome.storage.local.set({ status: 'error', count, error: String(lastError) });
-        report({ type: 'error', count });
-        break;
+      if (!succeeded) {
+        throw lastError;
       }
 
+      count++;
+      console.log('===', count, '本目 完了 ===');
+      saveState({ status: 'running', count, phase: 'processing' });
+      report({ type: 'progress', count });
       await delay(2500);
     }
   }
 
-  console.log('▶ ドラフト一括公開設定スクリプト起動');
-  autoPublishAllDrafts();
+  // ②③ このページにドラフトが無くなった後の処理。まずページ更新で再確認、それでもダメなら次ページへ
+  async function afterPageEmpty(count) {
+    checkStop();
+    console.log('このページにドラフトが見当たらない → ページを更新して確認する');
+    saveState({ status: 'running', count, phase: 'awaitingReloadCheck' });
+    await delay(500);
+    location.reload();
+    // reload後は新しいスクリプト実行に引き継がれるので、ここで終了
+    await new Promise(() => {}); // reloadが効くまでの間、何もしない
+  }
+
+  // ③ 更新後もドラフトが無かった場合、次のページへ
+  async function goToNextPage() {
+    const nextBtn = findNextPageButton();
+    if (!nextBtn) {
+      return false;
+    }
+    console.log('  → 次のページへ移動する');
+    nextBtn.click();
+    await delay(2500);
+    return true;
+  }
+
+  async function mainLoop({ resumeFromReloadCheck }) {
+    let count = (await chrome.storage.local.get('count')).count || 0;
+
+    if (resumeFromReloadCheck) {
+      checkStop();
+      const rows = findDraftRows();
+      if (rows.length === 0) {
+        console.log('更新してもドラフトが無かった → 次のページへ');
+        const moved = await goToNextPage();
+        if (!moved) {
+          console.log('🎉 次のページも無い。これで全部終わり!合計', count, '本処理した!');
+          saveState({ status: 'done', count, running: false });
+          report({ type: 'done', count });
+          return;
+        }
+      } else {
+        console.log('更新したらドラフトが見つかった → 処理を再開');
+      }
+    }
+
+    while (true) {
+      count = await processCurrentPage(count);
+      await afterPageEmpty(count); // この中でreloadして処理が止まる
+    }
+  }
+
+  async function start() {
+    window.__ytDraftBulkStop = false;
+    console.log('▶ ドラフト一括公開設定 起動');
+    try {
+      await mainLoop({ resumeFromReloadCheck: false });
+    } catch (e) {
+      await handleTopLevelError(e);
+    }
+  }
+
+  async function resumeAfterReload() {
+    window.__ytDraftBulkStop = false;
+    console.log('▶ ページ更新後、処理を再開');
+    try {
+      await mainLoop({ resumeFromReloadCheck: true });
+    } catch (e) {
+      await handleTopLevelError(e);
+    }
+  }
+
+  async function handleTopLevelError(e) {
+    const count = (await chrome.storage.local.get('count')).count || 0;
+    if (e && e.message === '__stopped_by_user__') {
+      console.log('🛑 停止ボタンが押されたので終了。ここまでで', count, '本処理した');
+      saveState({ status: 'stopped', count, running: false });
+      report({ type: 'stopped', count });
+    } else {
+      console.error('🛑 エラーで停止:', e);
+      saveState({ status: 'error', count, running: false, error: String(e) });
+      report({ type: 'error', count });
+    }
+  }
+
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type === 'start') {
+      chrome.storage.local.set({ running: true, count: 0, status: 'running', phase: 'processing' });
+      start();
+    } else if (msg.type === 'stop') {
+      window.__ytDraftBulkStop = true;
+      chrome.storage.local.set({ running: false });
+    }
+  });
+
+  // ページ読み込み時に「実行中だったか」を確認して、必要なら自動で再開する
+  chrome.storage.local.get(['running', 'phase'], (data) => {
+    if (data.running) {
+      if (data.phase === 'awaitingReloadCheck') {
+        resumeAfterReload();
+      } else {
+        start();
+      }
+    }
+  });
 })();
