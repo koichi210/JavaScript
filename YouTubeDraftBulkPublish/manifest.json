@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "YouTube ドラフト一括公開設定",
+  "name": "YouTube Studio エディタ",
   "version": "1.0",
-  "description": "YouTube Studioのドラフト動画をまとめて限定公開にするボタン",
+  "description": "YouTube Studioのドラフト一括公開・タイトル一括変更をまとめてやるボタン",
   "action": {
     "default_popup": "popup.html"
   },

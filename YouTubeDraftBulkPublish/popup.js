@@ -1,5 +1,6 @@
 const runBtn = document.getElementById('runBtn');
 const stopBtn = document.getElementById('stopBtn');
+const titlePanelBtn = document.getElementById('titlePanelBtn');
 const statusEl = document.getElementById('status');
 const progressEl = document.getElementById('progress');
 
@@ -60,5 +61,17 @@ stopBtn.addEventListener('click', async () => {
     statusEl.textContent = '停止リクエストを送ったよ。今処理中の1本が終わり次第止まるよ';
   } catch (e) {
     statusEl.textContent = 'エラー: ' + e.message;
+  }
+});
+
+titlePanelBtn.addEventListener('click', async () => {
+  const tab = await getStudioTab();
+  if (!tab) return;
+
+  try {
+    await chrome.tabs.sendMessage(tab.id, { type: 'toggleTitlePanel' });
+    window.close();
+  } catch (e) {
+    statusEl.textContent = 'エラー: ページを一度リロードしてから押してみて (' + e.message + ')';
   }
 });

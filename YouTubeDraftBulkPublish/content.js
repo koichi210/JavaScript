@@ -256,6 +256,245 @@
     }
   }
 
+  // ===== タイトル一括変更パネル =====
+
+  function getVisibleRows() {
+    return [...document.querySelectorAll('ytcp-video-row')].filter(isVisible);
+  }
+
+  function getRowThumbnail(row) {
+    const img = row.querySelector('img');
+    return img ? img.src : '';
+  }
+
+  function getRowTitle(row) {
+    const titleEl = row.querySelector('#video-title');
+    return titleEl ? titleEl.textContent.trim() : '';
+  }
+
+  function getRowVideoId(row) {
+    const a = row.querySelector('#video-title') || row.querySelector('a[href]');
+    if (!a) return null;
+    const m = (a.getAttribute('href') || '').match(/\/video\/([^/]+)\//);
+    return m ? m[1] : null;
+  }
+
+  function findRowByVideoId(videoId) {
+    return [...document.querySelectorAll('ytcp-video-row')].find((row) => getRowVideoId(row) === videoId);
+  }
+
+  async function setTitleField(newTitle) {
+    const box = await waitFor(() => document.querySelector('#title-textarea #textbox'), { timeout: 8000 });
+    box.focus();
+    document.execCommand('selectAll', false, null);
+    document.execCommand('insertText', false, newTitle);
+    box.dispatchEvent(new Event('input', { bubbles: true }));
+    await delay(300);
+  }
+
+  async function saveTitleAndClose(videoId, originalListUrl) {
+    // 公開済み動画: 上部に単独の「保存」ボタンが出る想定
+    let saveBtn = [...document.querySelectorAll('button, ytcp-button')].find(
+      (b) => b.textContent.trim() === '保存' && isVisible(b) && b.getAttribute('aria-disabled') !== 'true'
+    );
+    if (saveBtn) {
+      saveBtn.click();
+      console.log('  保存 クリック(公開済み動画)');
+      await waitFor(() => !document.querySelector('#title-textarea'), { timeout: 8000 }).catch(() => {});
+      await delay(500);
+      // 公開済み動画の編集画面は保存しても一覧に自動で戻らないので、戻る
+      if (!document.querySelector('ytcp-video-row')) {
+        console.log('  ← 一覧画面に戻る');
+        history.back();
+        // この動画の行が実際に再描画されるまで、しっかり待つ(一覧の再取得に時間がかかることがある)
+        const found = await waitFor(() => (videoId ? findRowByVideoId(videoId) : document.querySelector('ytcp-video-row')), {
+          timeout: 12000,
+          interval: 400,
+        }).catch(() => null);
+        if (!found) {
+          console.warn('  ⚠️ 一覧に戻ったが、この動画の行が見当たらない(URL:', location.href, ')');
+        }
+        await delay(500);
+      }
+      return;
+    }
+
+    // ドラフト動画: ウィザードのXボタンで閉じる → 下書きとして自動保存される想定
+    const closeBtn = [...document.querySelectorAll('ytcp-icon-button, button')].find((b) => {
+      const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+      return isVisible(b) && (aria.includes('close') || aria.includes('閉じる') || b.id === 'close-icon-button');
+    });
+    if (closeBtn) {
+      closeBtn.click();
+      console.log('  ✕ クリック(ドラフト動画、下書きとして保存想定)');
+      await delay(800);
+      // 確認ダイアログが出たら保存側を選ぶ
+      const confirmSave = [...document.querySelectorAll('button, ytcp-button')].find(
+        (b) => b.textContent.trim() === '保存' && isVisible(b)
+      );
+      if (confirmSave) confirmSave.click();
+      await delay(800);
+    } else {
+      throw new Error('保存ボタンも閉じるボタンも見つからなかった');
+    }
+  }
+
+  async function updateOneTitle(row, newTitle, originalListUrl) {
+    checkStop();
+    const videoId = getRowVideoId(row);
+    clickRow(row);
+    await waitFor(() => document.querySelector('#title-textarea #textbox'), { timeout: 8000 });
+    await delay(500);
+    await setTitleField(newTitle);
+    await saveTitleAndClose(videoId, originalListUrl);
+  }
+
+  let titlePanelEl = null;
+
+  function closeTitlePanel() {
+    if (titlePanelEl) {
+      if (titlePanelEl.__pollTimer) clearInterval(titlePanelEl.__pollTimer);
+      titlePanelEl.remove();
+      titlePanelEl = null;
+    }
+  }
+
+  function openTitlePanel() {
+    if (titlePanelEl) {
+      closeTitlePanel();
+      return;
+    }
+
+    let rows = getVisibleRows();
+    let originalListUrl = location.href;
+    let applying = false;
+
+    const panel = document.createElement('div');
+    panel.style.cssText = `
+      position: fixed; top: 16px; right: 16px; bottom: 140px; width: 340px;
+      background: #212121; color: #eee; z-index: 999999; border-radius: 10px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.5); font-family: sans-serif;
+      display: flex; flex-direction: column; overflow: hidden;
+      border: 1px solid #444;
+    `;
+
+    panel.innerHTML = `
+      <div style="padding:12px 14px; background:#2b2b2b; display:flex; justify-content:space-between; align-items:center;">
+        <strong id="ytb-title-heading">✏️ タイトル一括変更</strong>
+        <span id="ytb-title-close" style="cursor:pointer; font-size:18px;">✕</span>
+      </div>
+      <div id="ytb-title-list" style="overflow-y:auto; padding:10px 14px; flex:1;"></div>
+      <div style="padding:10px 14px; border-top:1px solid #444; background:#2b2b2b;">
+        <div id="ytb-title-status" style="font-size:12px; color:#ccc; margin-bottom:8px;">変えたい行だけ書き換えてね</div>
+        <button id="ytb-title-apply" style="width:100%; padding:10px; background:#9c6ade; color:#fff; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">一括変更 実行</button>
+      </div>
+    `;
+
+    document.body.appendChild(panel);
+    titlePanelEl = panel;
+
+    const list = panel.querySelector('#ytb-title-list');
+    const heading = panel.querySelector('#ytb-title-heading');
+    const statusElOuter = panel.querySelector('#ytb-title-status');
+
+    function renderList() {
+      heading.textContent = `✏️ タイトル一括変更 (${rows.length}件)`;
+      list.innerHTML = '';
+      rows.forEach((row) => {
+        const original = getRowTitle(row);
+        const thumb = getRowThumbnail(row);
+        const item = document.createElement('div');
+        item.style.cssText = 'display:flex; gap:8px; align-items:center; margin-bottom:10px;';
+        item.innerHTML = `
+          ${thumb ? `<img src="${thumb}" style="width:48px; height:27px; object-fit:cover; border-radius:4px; flex-shrink:0;">` : ''}
+          <input type="text" value="${original.replace(/"/g, '&quot;')}" style="flex:1; min-width:0; padding:6px 8px; background:#1a1a1a; color:#eee; border:1px solid #555; border-radius:4px; font-size:12px;">
+        `;
+        const input = item.querySelector('input');
+        input.dataset.original = original;
+        input.dataset.videoId = getRowVideoId(row) || '';
+        list.appendChild(item);
+      });
+    }
+
+    renderList();
+    // 「今の状態」を文字列として固定で覚えておく(rowsの要素は使い回されるので、都度読み直すと比較にならない)
+    let lastKnownIds = rows.map(getRowVideoId).join(',');
+
+    // ブラウザ側で次のページ/前のページに移動したら、パネルの中身を追従させる
+    // (行のDOMは使い回されて中身だけ書き換わるタイプなので、MutationObserverでなく定期チェックにする)
+    const pollTimer = setInterval(() => {
+      if (applying) return; // 実行中は横から書き換えない
+      const freshRows = getVisibleRows();
+      if (freshRows.length === 0) return;
+      const freshIds = freshRows.map(getRowVideoId).join(',');
+      if (freshIds !== lastKnownIds) {
+        console.log('📄 一覧が変わったのを検知 → タイトルパネルを更新');
+        rows = freshRows;
+        lastKnownIds = freshIds;
+        originalListUrl = location.href;
+        renderList();
+      }
+    }, 1000);
+    titlePanelEl.__pollTimer = pollTimer;
+
+    panel.querySelector('#ytb-title-close').addEventListener('click', closeTitlePanel);
+
+    panel.querySelector('#ytb-title-apply').addEventListener('click', async () => {
+      const statusEl = statusElOuter;
+      const applyBtn = panel.querySelector('#ytb-title-apply');
+      const inputs = [...list.querySelectorAll('input')].filter(
+        (inp) => inp.value.trim() !== inp.dataset.original.trim() && inp.value.trim() !== ''
+      );
+
+      if (inputs.length === 0) {
+        statusEl.textContent = '変更されてる行がないよ';
+        return;
+      }
+
+      applyBtn.disabled = true;
+      applyBtn.textContent = '実行中...';
+      window.__ytDraftBulkStop = false;
+      applying = true;
+
+      let done = 0;
+      let failed = 0;
+      for (const input of inputs) {
+        const videoId = input.dataset.videoId;
+        const newTitle = input.value.trim();
+        statusEl.textContent = `処理中... (${done + failed + 1}/${inputs.length})`;
+        try {
+          const row = videoId ? findRowByVideoId(videoId) : null;
+          if (!row) {
+            throw new Error('この動画が今の画面上で見つからなかった(一覧が作り直された?)');
+          }
+          await updateOneTitle(row, newTitle, originalListUrl);
+          done++;
+          input.style.borderColor = '#3fb950';
+          console.log('✅ タイトル変更完了:', newTitle);
+        } catch (e) {
+          failed++;
+          input.style.borderColor = '#e05252';
+          console.error('🛑 タイトル変更失敗:', newTitle, e);
+        }
+        await delay(2000);
+      }
+
+      applying = false;
+      applyBtn.disabled = false;
+      applyBtn.textContent = '一括変更 実行';
+      statusEl.textContent = `完了: 成功${done}件 / 失敗${failed}件`;
+
+      // 実行が終わったタイミングで、念のため最新の一覧に合わせておく
+      const freshRows = getVisibleRows();
+      if (freshRows.length > 0) {
+        rows = freshRows;
+        lastKnownIds = freshRows.map(getRowVideoId).join(',');
+        originalListUrl = location.href;
+        renderList();
+      }
+    });
+  }
+
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === 'start') {
       chrome.storage.local.set({ running: true, count: 0, status: 'running', phase: 'processing' });
@@ -263,6 +502,8 @@
     } else if (msg.type === 'stop') {
       window.__ytDraftBulkStop = true;
       chrome.storage.local.set({ running: false });
+    } else if (msg.type === 'toggleTitlePanel') {
+      openTitlePanel();
     }
   });
 
